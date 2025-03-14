@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <sys/un.h>
 #include <fcntl.h>
+#include <pthread.h>
 
 //INCLUDES for extra credit
 //#include <signal.h>
@@ -55,19 +56,24 @@ int start_server(char *ifaces, int port, int is_threaded){
     //       to keep track of is_threaded to handle this feature
     //
 
-    fprintf(stderr, "socket server mode:  addr:%s:%d\n", ifaces, port);
-    fprintf(stderr, "-> %s Mode\n", is_threaded ? "Threaded" : "Single-Threaded");
-
     svr_socket = boot_server(ifaces, port);
     if (svr_socket < 0){
         int err_code = svr_socket;  //server socket will carry error code
         return err_code;
     }
 
-    rc = process_cli_requests(svr_socket);
+    // Print server startup info
+    fprintf(stderr, "socket server mode:  addr:%s:%d\n", ifaces, port);
+    fprintf(stderr, "-> %s Mode\n", is_threaded ? "Threaded" : "Single-Threaded");
+
+    // choose handling client mode
+    if (is_threaded) {
+        rc = process_cli_requests_threaded(svr_socket);
+    } else {
+        rc = process_cli_requests(svr_socket);
+    }
 
     stop_server(svr_socket);
-
     return rc;
 }
 
@@ -530,6 +536,52 @@ int rsh_execute_pipeline(int cli_sock, command_list_t *clist) {
     return exit_code;
 }
 
+// thread function
+void *handle_client(void *arg) {
+    int cli_socket = *(int *)arg;
+    free(arg);
+
+    exec_client_requests(cli_socket);
+
+    return NULL;
+}
+
+// multi-threaded version
+int process_cli_requests_threaded(int svr_socket) {
+    int cli_socket;
+    pthread_t tid;
+
+    while (1) {
+        // accept client
+        cli_socket = accept(svr_socket, NULL, NULL);
+        if (cli_socket < 0) {
+            perror("accept failed");
+            continue;
+        }
+
+        // allocate memory
+        int *cli_sock_ptr = malloc(sizeof(int));
+        if (!cli_sock_ptr) {
+            perror("malloc failed");
+            close(cli_socket);
+            continue;
+        }
+
+        *cli_sock_ptr = cli_socket;
+
+        // create detached thread
+        if (pthread_create(&tid, NULL, handle_client, cli_sock_ptr) != 0) {
+            perror("pthread_create failed");
+            free(cli_sock_ptr);
+            close(cli_socket);
+            continue;
+        }
+        // detach
+        pthread_detach(tid);
+    }
+
+    return OK;
+}
 /**************   OPTIONAL STUFF  ***************/
 /****
  **** NOTE THAT THE FUNCTIONS BELOW ALIGN TO HOW WE CRAFTED THE SOLUTION

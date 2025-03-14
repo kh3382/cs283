@@ -308,3 +308,71 @@ EOF
     # Assertions
     [ "$status" -eq 0 ]
 }
+
+@test "Multi-threaded server test" {
+    # kill any previous server
+    pkill -f "./dsh -s -x" 2>/dev/null || true
+    sleep 1
+
+    # start server in threaded mode
+    ./dsh -s -x 2>/dev/null &
+    server_pid=$!
+    sleep 2
+
+    # client 1
+    ./dsh -c > client1_output.txt <<EOF &           
+echo client1
+exit
+EOF
+    pid1=$!
+
+    # client 2
+    ./dsh -c > client2_output.txt <<EOF &
+echo client2
+exit
+EOF
+    pid2=$!
+
+    wait $pid1
+    wait $pid2
+
+    # stop server
+    ./dsh -c > /dev/null <<EOF
+stop-server
+EOF
+
+    sleep 1
+
+    # kill if still running
+    if kill -0 $server_pid 2>/dev/null; then
+        kill $server_pid
+        wait $server_pid 2>/dev/null || true
+    fi
+
+    # save outputs
+    output1=$(<client1_output.txt)
+    output2=$(<client2_output.txt)
+
+    # Strip all whitespace (spaces, tabs, newlines) from the output
+    stripped_output1=$(echo "$output1" | tr -d '[:space:]')
+    stripped_output2=$(echo "$output2" | tr -d '[:space:]')
+
+    # Expected output with all whitespace removed for easier matching
+    expected_client1="socketclientmode:addr:127.0.0.1:1234dsh4>client1dsh4>serverappearedtoterminate-exitingcmdloopreturned0"
+    expected_client2="socketclientmode:addr:127.0.0.1:1234dsh4>client2dsh4>serverappearedtoterminate-exitingcmdloopreturned0"
+
+    # These echo commands will help with debugging and will only print
+    #if the test fails
+    echo "Captured Client 1 Output: $output1"
+    echo "Captured Client 2 Output: $output2"
+    echo "Exit Status: $status"
+    echo "${stripped_output1} -> ${expected_client1}"
+    echo "${stripped_output2} -> ${expected_client2}"
+
+    # Check exact match
+    [ "$stripped_output1" = "$expected_client1" ]
+    [ "$stripped_output2" = "$expected_client2" ]
+
+    # cleanup
+    rm -f client1_output.txt client2_output.txt
+}

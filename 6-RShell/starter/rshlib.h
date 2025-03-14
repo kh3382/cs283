@@ -2,6 +2,7 @@
     #define __RSH_LIB_H__
 
 #include "dshlib.h"
+#include <pthread.h>
 
 //common remote shell client and server constants and definitions
 
@@ -54,6 +55,7 @@ static const char RDSH_EOF_CHAR = 0x04;
 int start_client(char *address, int port);
 int client_cleanup(int cli_socket, char *cmd_buff, char *rsp_buff, int rc);
 int exec_remote_cmd_loop(char *address, int port);
+void *handle_client(void *arg);
     
 
 //server prototypes for rsh_server.c - see documentation for each function to
@@ -66,6 +68,7 @@ int send_message_string(int cli_socket, char *buff);
 int process_cli_requests(int svr_socket);
 int exec_client_requests(int cli_socket);
 int rsh_execute_pipeline(int socket_fd, command_list_t *clist);
+int process_cli_requests_threaded(int svr_socket);
 
 Built_In_Cmds rsh_match_command(const char *input);
 Built_In_Cmds rsh_built_in_cmd(cmd_buff_t *cmd);
