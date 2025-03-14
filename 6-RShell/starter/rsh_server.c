@@ -55,6 +55,9 @@ int start_server(char *ifaces, int port, int is_threaded){
     //       to keep track of is_threaded to handle this feature
     //
 
+    fprintf(stderr, "socket server mode:  addr:%s:%d\n", ifaces, port);
+    fprintf(stderr, "-> %s Mode\n", is_threaded ? "Threaded" : "Single-Threaded");
+
     svr_socket = boot_server(ifaces, port);
     if (svr_socket < 0){
         int err_code = svr_socket;  //server socket will carry error code
@@ -203,7 +206,7 @@ int boot_server(char *ifaces, int port){
  */
 int process_cli_requests(int svr_socket){
     int     cli_socket;
-    int     rc = OK;    
+    int     rc;    
 
     while(1){
         // TODO use the accept syscall to create cli_socket 
@@ -223,6 +226,7 @@ int process_cli_requests(int svr_socket){
         if (rc == OK_EXIT) break;
     }
 
+    //stop_server(svr_socket);
     return rc;
 }
 
@@ -277,6 +281,7 @@ int exec_client_requests(int cli_socket) {
 
     io_buff = malloc(RDSH_COMM_BUFF_SZ);
     if (io_buff == NULL){
+        printf(CMD_ERR_RDSH_ITRNL, ERR_RDSH_SERVER);
         return ERR_RDSH_SERVER;
     }
 
@@ -297,10 +302,11 @@ int exec_client_requests(int cli_socket) {
         // TODO build up a cmd_list
         // handle built-in commands
         if (strcmp(io_buff, "exit") == 0) {
-            rc = OK;
+            rc = OK; 
             break;
         } else if (strcmp(io_buff, "stop-server") == 0) {
-            rc = OK_EXIT;
+            printf("%s", RCMD_MSG_SVR_STOP_REQ);
+            rc = OK_EXIT; 
             break;
         }
 
@@ -308,7 +314,6 @@ int exec_client_requests(int cli_socket) {
         memset(&cmd_list, 0, sizeof(command_list_t));
         rc = parse_input(io_buff, &cmd_list);
         if (rc != OK) {
-            send_message_string(cli_socket, "Failed to parse command.");
             send_message_eof(cli_socket);
             continue;
         }
@@ -320,10 +325,6 @@ int exec_client_requests(int cli_socket) {
         //  - etc.
         // Execute pipeline and handle return code
         cmd_rc = rsh_execute_pipeline(cli_socket, &cmd_list);
-        if (cmd_rc != OK) {
-            // send execution error if needed
-            send_message_string(cli_socket, "Failed to execute command.");
-        }
 
         // TODO send_message_eof when done
         send_message_eof(cli_socket);
@@ -338,7 +339,6 @@ int exec_client_requests(int cli_socket) {
 
     free(io_buff);
     return rc;
-
 }
 
 /*
@@ -455,7 +455,7 @@ int rsh_execute_pipeline(int cli_sock, command_list_t *clist) {
     for (int i = 0; i < clist->num - 1; i++) {
         if (pipe(pipes[i]) == -1) {
             perror("pipe");
-            exit(EXIT_FAILURE);
+            return ERR_RDSH_CMD_EXEC;
         }
     }
 
@@ -465,14 +465,11 @@ int rsh_execute_pipeline(int cli_sock, command_list_t *clist) {
         pid_t pid = fork();
         if (pid == -1) {
             perror("fork");
-            return ERR_EXEC_CMD;
+            return ERR_RDSH_CMD_EXEC;
         }
-
-        pids[i] = pid;
 
         // child process
         if (pid == 0) {
-
             // set up stdin
             if (i == 0) {
                 // read from client
@@ -499,13 +496,14 @@ int rsh_execute_pipeline(int cli_sock, command_list_t *clist) {
                 close(pipes[j][1]);
             }
 
-            // close client socket in child
-            close(cli_sock);
-
             // Execute command
-            execvp(clist->commands[i].argv[0], clist->commands[i].argv);
-            perror("execvp failed"); 
-            exit(ERR_EXEC_CMD);
+            if (execvp(clist->commands[i].argv[0], clist->commands[i].argv) == -1) {
+                send_message_string(cli_sock, CMD_ERR_RDSH_EXEC);
+                send_message_eof(cli_sock); 
+                exit(ERR_RDSH_CMD_EXEC);
+            }
+        } else {
+            pids[i] = pid;
         }
     }
 

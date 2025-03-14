@@ -11,9 +11,6 @@
 #include "dshlib.h"
 #include "rshlib.h"
 
-
-
-
 /*
  * exec_remote_cmd_loop(server_ip, port)
  *      server_ip:  a string in ip address format, indicating the servers IP
@@ -92,19 +89,22 @@
  */
 int exec_remote_cmd_loop(char *address, int port)
 {
-    char *cmd_buff;
-    char *rsp_buff;
+    char *cmd_buff = NULL;
+    char *rsp_buff = NULL;
     int cli_socket;
     ssize_t io_size;
     int is_eof;
+    int stop_server_sent = 0; // flag
 
     // TODO set up cmd and response buffs
+    cmd_buff = malloc(RDSH_COMM_BUFF_SZ);
+    rsp_buff = malloc(RDSH_COMM_BUFF_SZ);
 
     if (!cmd_buff || !rsp_buff) {
-        return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_MEMORY);
+        return client_cleanup(-1, cmd_buff, rsp_buff, ERR_MEMORY);
     }
 
-    cli_socket = start_client(address,port);
+    cli_socket = start_client(address, port);
     if (cli_socket < 0){
         perror("start client");
         return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_RDSH_CLIENT);
@@ -113,7 +113,7 @@ int exec_remote_cmd_loop(char *address, int port)
     while (1) 
     {
         // TODO print prompt
-        printf("rsh> "); // Prompt
+        printf("dsh4> "); // Prompt
 
         // TODO fgets input
         if (fgets(cmd_buff, RDSH_COMM_BUFF_SZ, stdin) == NULL) {
@@ -122,38 +122,61 @@ int exec_remote_cmd_loop(char *address, int port)
         }
 
         // remove newline
-        cmd_buff[strcspn(cmd_buff, "\n")] = '\0';
+        size_t len = strlen(cmd_buff);
+        if (len > 0 && cmd_buff[len - 1] == '\n') {
+            cmd_buff[len - 1] = '\0';
+        }
+
+        // adjust flag if necessary
+        if (strcmp(cmd_buff, "stop-server") == 0) {
+            stop_server_sent = 1;
+        }
 
         // TODO send() over cli_socket
         // send command as null-terminated string
-        if (send(cli_socket, cmd_buff, strlen(cmd_buff) + 1, 0) <= 0) {
-            perror("send");
+        if (send(cli_socket, cmd_buff, strlen(cmd_buff) + 1, 0) < 0) {
+            printf(CMD_ERR_RDSH_COMM);
             return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_RDSH_COMMUNICATION);
         }
 
         // TODO recv all the results
-        while (1) {
-            memset(rsp_buff, 0, RDSH_COMM_BUFF_SZ);
+        do {
             io_size = recv(cli_socket, rsp_buff, RDSH_COMM_BUFF_SZ, 0);
             if (io_size < 0) {
-                perror("recv");
+                printf(CMD_ERR_RDSH_COMM);
                 return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_RDSH_COMMUNICATION);
-            } else if (io_size == 0) {
-                return client_cleanup(cli_socket, cmd_buff, rsp_buff, OK);
             }
-        
-            // Check for EOF character
+            if (io_size == 0) {
+                if (stop_server_sent) {
+                    printf(RCMD_MSG_SVR_STOP_REQ);
+                    return client_cleanup(cli_socket, cmd_buff, rsp_buff, OK_EXIT);
+                } else {
+                    printf(RCMD_SERVER_EXITED);
+                    return client_cleanup(cli_socket, cmd_buff, rsp_buff, OK);
+                }
+            }
+
+            // if last byte is EOF character
             is_eof = (rsp_buff[io_size - 1] == RDSH_EOF_CHAR);
-            if (is_eof) break;
-        }
+            if (is_eof) {
+                rsp_buff[io_size - 1] = '\0'; 
+            } else {
+                rsp_buff[io_size] = '\0'; 
+            }
+
+            // print response
+            printf("%s", rsp_buff);
+
+        } while (!is_eof);
 
         // TODO break on exit command
-        if (strcmp(cmd_buff, "exit") == 0 || strcmp(cmd_buff, "stop-server") == 0) {
+        if (strcmp(cmd_buff, "exit") == 0 || stop_server_sent) {
             break;
-        }
+        } 
+
     }
 
-    return client_cleanup(cli_socket, cmd_buff, rsp_buff, OK);
+    return client_cleanup(cli_socket, cmd_buff, rsp_buff, stop_server_sent ? OK_EXIT : OK);
 }
 
 /*
@@ -238,13 +261,13 @@ int start_client(char *server_ip, int port){
  */
 int client_cleanup(int cli_socket, char *cmd_buff, char *rsp_buff, int rc){
     //If a valid socket number close it.
-    if(cli_socket > 0){
+    if(cli_socket >= 0){
         close(cli_socket);
     }
 
     //Free up the buffers 
-    free(cmd_buff);
-    free(rsp_buff);
+    if (cmd_buff != NULL) free(cmd_buff);
+    if (rsp_buff != NULL) free(rsp_buff);
 
     //Echo the return value that was passed as a parameter
     return rc;
